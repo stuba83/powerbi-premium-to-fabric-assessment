@@ -161,7 +161,7 @@ These are indicators of ungoverned organic growth common in tenants where Premiu
 ## Author
 
 **Steven Uba** — Sr. Azure Solution Engineer, Data & Analytics  
-Microsoft STU LATAM  
+Microsoft LATAM  
 
 ---
 
