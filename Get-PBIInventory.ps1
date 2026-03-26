@@ -38,7 +38,9 @@
 $AuthMode     = "Interactive"
 $ClientId     = ""
 $ClientSecret = ""
-$OutputFolder = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$ScriptRoot   = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$OutputFolder = Join-Path $ScriptRoot "output"
+if (-not (Test-Path $OutputFolder)) { New-Item -ItemType Directory -Path $OutputFolder | Out-Null }
 $BatchSize    = 100
 $DelayMs      = 200
 
@@ -240,14 +242,41 @@ function Get-M365PBIUsers {
             $Url       = $Response.'@odata.nextLink'
         } while ($Url)
 
+        # Power BI specific SKU IDs
+        # These are the well-known GUIDs for PBI licenses across M365 plans
+        $PBISkuIds = @(
+            "f8a1db68-be16-40ed-86d5-cb42ce701560",  # Power BI Pro
+            "b8a9ee8d-8a95-4f7c-82c8-6b43f5b6e67c",  # Power BI Premium Per User
+            "de376a03-6e0f-4d4c-b4cf-9b9a345b8a06",  # Power BI Premium Per User Add-On
+            "a403ebcc-fae0-4ca2-8c8c-7a907fd6c235",  # Power BI (free) — Fabric Free
+            "d05e6a75-3461-4c0f-9da8-31a9aac51b3d"   # Power BI Pro (GCC)
+        )
+
         foreach ($U in $AllUsers) {
             if (-not $U.userPrincipalName -or $U.userPrincipalName -notlike "*@*") { continue }
             if ($U.userPrincipalName -like "*#EXT#*") { continue }
+
+            # Check if user has any Power BI specific license
+            $UserSkuIds = @($U.assignedLicenses | ForEach-Object { $_.skuId })
+            $HasPROLicense  = $UserSkuIds -contains "f8a1db68-be16-40ed-86d5-cb42ce701560"
+            $HasPPULicense  = ($UserSkuIds -contains "b8a9ee8d-8a95-4f7c-82c8-6b43f5b6e67c") -or
+                              ($UserSkuIds -contains "de376a03-6e0f-4d4c-b4cf-9b9a345b8a06")
+            $HasFreeLicense = $UserSkuIds -contains "a403ebcc-fae0-4ca2-8c8c-7a907fd6c235"
+            $HasAnyPBILicense = $HasPROLicense -or $HasPPULicense -or $HasFreeLicense
+
+            # Only include users with a Power BI related license
+            if (-not $HasAnyPBILicense) { continue }
+
+            $LicenseType = if ($HasPPULicense) { "PPU" } elseif ($HasPROLicense) { "PRO" } else { "Free" }
+
             $PBIUsers[$U.userPrincipalName.ToLower()] = [PSCustomObject]@{
                 UserUpn      = $U.userPrincipalName
                 DisplayName  = $U.displayName
-                HasLicense   = ($U.assignedLicenses -and $U.assignedLicenses.Count -gt 0)
-                LicenseCount = if ($U.assignedLicenses) { $U.assignedLicenses.Count } else { 0 }
+                HasLicense   = $true
+                LicenseType  = $LicenseType
+                HasPRO       = $HasPROLicense
+                HasPPU       = $HasPPULicense
+                HasFree      = $HasFreeLicense
             }
         }
         Write-Host "      M365 users fetched: $($PBIUsers.Count)" -ForegroundColor DarkGray
@@ -428,7 +457,12 @@ function Export-Summary {
 
     $Workspaces = $Data.Workspaces
     $UserAgg    = @($Data.UserAgg)
-    $NoWsCount  = if ($Data.UsersWithoutWorkspace) { @($Data.UsersWithoutWorkspace).Count } else { 0 }
+    $NoWsCount     = if ($Data.UsersWithoutWorkspace) { @($Data.UsersWithoutWorkspace).Count } else { 0 }
+    $NoWsPRO       = if ($Data.UsersWithoutWorkspace) { @($Data.UsersWithoutWorkspace | Where-Object { $_.HasPRO }).Count } else { 0 }
+    $NoWsPPU       = if ($Data.UsersWithoutWorkspace) { @($Data.UsersWithoutWorkspace | Where-Object { $_.HasPPU }).Count } else { 0 }
+    $NoWsFree      = if ($Data.UsersWithoutWorkspace) { @($Data.UsersWithoutWorkspace | Where-Object { $_.HasFree }).Count } else { 0 }
+    $NoWsPROCost   = [math]::Round($NoWsPRO * $pro, 2)
+    $NoWsPPUCost   = [math]::Round($NoWsPPU * $ppu, 2)
 
     $CapSummary = $Workspaces |
         Group-Object CapacityName |
@@ -494,11 +528,13 @@ USER CLASSIFICATION  (from workspace roles)
   Unclassified (review manually)   : $Unknown
   Total PPU users identified       : $PPUTotal
 
-  GOVERNANCE ALERT:
-  M365 licensed users NOT in any workspace: $NoWsCount
-  These users have a Power BI license assigned in M365 but are not members
-  of any shared workspace. They may be inactive, orphaned, or consuming
-  licenses unnecessarily. Review PBI_UsersWithoutWorkspace.csv.
+  GOVERNANCE ALERT — Power BI licensed users NOT in any workspace: $NoWsCount
+    PRO licenses (no workspace)  : $NoWsPRO  -> `$$([math]::Round($NoWsPROCost, 2))/mo wasted
+    PPU licenses (no workspace)  : $NoWsPPU  -> `$$([math]::Round($NoWsPPUCost, 2))/mo wasted
+    Free licenses (no workspace) : $NoWsFree -> `$0/mo (no cost impact)
+  These users have a Power BI license but are not members of any shared
+  workspace. PRO and PPU licenses assigned to inactive users represent
+  direct cost savings opportunity. Review PBI_UsersWithoutWorkspace.csv.
 
   NOTE: Developer = Admin/Member/Contributor in ANY workspace.
         Viewer Only = exclusively Viewer in ALL workspaces.
