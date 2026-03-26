@@ -440,8 +440,10 @@ function Get-UsersWithoutWorkspace {
             $NoWsRows += [PSCustomObject]@{
                 UserUpn      = $U.UserUpn
                 DisplayName  = $U.DisplayName
-                HasLicense   = $U.HasLicense
-                LicenseCount = $U.LicenseCount
+                LicenseType  = $U.LicenseType
+                HasPRO       = $U.HasPRO
+                HasPPU       = $U.HasPPU
+                HasFree      = $U.HasFree
                 Note         = "Has M365 license but is NOT a member of any Power BI workspace — review for license optimization"
             }
         }
