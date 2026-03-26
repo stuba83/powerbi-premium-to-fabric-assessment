@@ -117,25 +117,45 @@ function Connect-PBIService {
 
 function Invoke-PBIAdminAPI {
     param([string]$Endpoint, [hashtable]$QueryParams = @{})
-    $BaseUrl = "https://api.powerbi.com/v1.0/myorg/admin/$Endpoint"
-    $Results = @()
-    $Skip    = 0
+    $BaseUrl  = "https://api.powerbi.com/v1.0/myorg/admin/$Endpoint"
+    $Results  = @()
+    $Skip     = 0
+    $MaxRetry = 5   # max retries on 429 throttle
+
     do {
         $QueryParams['$top']  = $BatchSize
         $QueryParams['$skip'] = $Skip
         $QS  = ($QueryParams.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join "&"
         $Url = "$BaseUrl`?$QS"
-        try {
-            $Response = Invoke-PowerBIRestMethod -Url $Url -Method Get | ConvertFrom-Json
-        } catch {
-            Write-Warning "API call failed for $Url : $_"
-            break
+
+        $Attempt = 0
+        $Success = $false
+        while (-not $Success -and $Attempt -lt $MaxRetry) {
+            try {
+                $Response = Invoke-PowerBIRestMethod -Url $Url -Method Get | ConvertFrom-Json
+                $Success  = $true
+            } catch {
+                $ErrMsg = $_.ToString()
+                if ($ErrMsg -like "*429*") {
+                    $Attempt++
+                    $Wait = [math]::Pow(2, $Attempt) * 1000  # exponential backoff: 2s, 4s, 8s, 16s, 32s
+                    Write-Host "      [429 Throttle] Waiting $([int]($Wait/1000))s before retry $Attempt/$MaxRetry..." -ForegroundColor Yellow
+                    Start-Sleep -Milliseconds $Wait
+                } else {
+                    Write-Warning "API call failed for $Url : $_"
+                    break
+                }
+            }
         }
+
+        if (-not $Success) { break }
+
         $Items = if ($Response.PSObject.Properties['value']) { $Response.value } else { $Response }
         if (-not $Items -or $Items.Count -eq 0) { break }
         $Results += $Items
         $Skip    += $BatchSize
         Start-Sleep -Milliseconds $DelayMs
+
     } while ($Items.Count -eq $BatchSize)
     return $Results
 }
