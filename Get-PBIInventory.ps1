@@ -579,6 +579,8 @@ NEXT STEPS
 # MAIN EXECUTION
 # ============================================================
 
+$WarningPreference = "SilentlyContinue"   # suppress MSAL internal warnings
+
 if (-not (Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt)) {
     Write-Host "Installing MicrosoftPowerBIMgmt module..." -ForegroundColor Cyan
     Install-Module MicrosoftPowerBIMgmt -Scope CurrentUser -Force
